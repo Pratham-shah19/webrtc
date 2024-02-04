@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <link rel="stylesheet" href="style.css">
+        <title>admin</title>
+    </head>
+
+    <body>
+        <h3> admin </h3>
+        <span id="connected">dis-connected</span>
+        <div id="exam">
+            <br>
+            NO STUDENTS ARE LIVE
+        </div>
+
+        <video class="remoteview" autoplay></video>
+    </body>
+    <script>
+        const remoteVideo = document.querySelector("video.remoteview");
+        const constraints = { audio: false, video: true };
+        const view = document.querySelector('#exam');
+        const config = {
+            iceServers: [{
+                urls: "turn:124.64.206.224:8800", username: "webrtc",
+                credential: "turnserver"
+            }],
+        };
+        // let url = "ws://192.168.215.83:6503"
+        // let url = "ws://192.168.43.147:6503";
+        // let url = "ws://192.168.1.175:6503";
+        // let url = "ws://192.168.20.83:6503"
+        let url = "ws://192.168.1.8:6503";
+
+
+        var last_index = 0;
+        var current_student = null;
+        var socket = new WebSocket(url, "json");
+        var live_students = {};
+
+        class webrtc {
+            constructor(message) {
+                console.log(message);
+                this.exam = message.exam;
+                this.id = message.sid;
+                this.name = message.name;
+                this.index = message.index;
+                this.rc = new RTCPeerConnection(config);
+                this.rc.ondatachannel = this.handleDataChannel.bind(this);
+                this.rc.ontrack = this.handleTrackEvent.bind(this);
+                this.rc.onicecandidate = this.handleICECandidateEvent.bind(this);
+            }
+
+
+            sendToServer(data) {
+                data = JSON.stringify(data);
+                socket.send(data);
+            }
+            handleDataChannel(evt) {
+                this.rc.channel = evt.channel;
+                this.rc.channel.onopen = () => console.log("channel is open...");
+                this.rc.channel.onclose = () => console.log("channel is closed...");
+                this.rc.channel.onmessage = (msg) => console.log("channel message:" + msg.data);
+            }
+            handleTrackEvent(evt) {
+                console.log('track');
+                remoteVideo.srcObject = evt.streams[0];
+                console.log(remoteVideo)
+
+            };
+
+            handleICECandidateEvent(event) {
+                if (event.candidate) {
+                    console.log("*** Outgoing ICE candidate: " + event.candidate.candidate);
+                    this.sendToServer({
+                        type: "new-ice-candidate",
+                        target: this.id,
+                        to: "student",
+                        exam: this.exam,
+                        candidate: event.candidate,
+                        from: "admin"
+                    });
+                }
+            }
+
+            async handleOffer(msg) {
+                let sdp = msg.sdp;
+                let desc = new RTCSessionDescription(sdp);
+                await this.rc.setRemoteDescription(desc);
+                await this.rc.setLocalDescription(await this.rc.createAnswer());
+                this.sendToServer({
+                    name: "admin",
+                    target: this.id,
+                    exam: this.exam,
+                    type: "answer",
+                    sdp: this.rc.localDescription,
+
+                });
+            }
+
+            async handleNewICECandidateMsg(msg) {
+                var candidate = new RTCIceCandidate(msg.candidate);
+                console.log("*** Adding received ICE candidate: " + JSON.stringify(candidate));
+                try {
+                    await this.rc.addIceCandidate(candidate);
+                } catch (err) {
+                    console.log("err:" + err);
+                }
+            }
+
+        }
+
+
+
+        //webcam and screenshare button handlers
+        function webcbutton(id) {
+            //remove stream if there is already some one live
+            if (current_student && live_students[current_student]) {
+                live_students[current_student].rtc.rc.channel.send(JSON.stringify({
+                    type: "removestream"
+                }))
+            }
+            let student_channel = live_students[id].rtc.rc.channel;
+            current_student = id;
+            console.log("webbutton:" + id);
+
+            student_channel.send(JSON.stringify({
+                type: "sharemode",
+                mode: "webcam"
+            }))
+
+        };
+
+        function kickstudent(id) {
+            console.log("kick student" + id);
+        }
+        function screenbutton(id) {
+            //remove stream if there is already some one live
+            if (current_student && live_students[current_student]) {
+                live_students[current_student].rtc.rc.channel.send(JSON.stringify({
+                    type: "removestream"
+                }))
+            }
+            let student_channel = live_students[id].rtc.rc.channel;
+            current_student = id;
+            student_channel.send(JSON.stringify({
+                type: "sharemode",
+                mode: "screen"
+            }))
+        }
+
+        socket.onopen = () => {
+            const show = document.querySelector('#connected');
+            show.textContent = "connected";
+        }
+        socket.onclose = () => {
+            const show = document.querySelector('#connected');
+            show.textContent = "dis-connected";
+        }
+        socket.onmessage = async (msg) => {
+            var message = JSON.parse(msg.data);
+            //when connecting for the first time
+            //we need to send the username
+            if (message.type === 'id') {
+                console.log("socket connected")
+                var newname = {
+                    type: "admindetails",
+                    name: "admin",
+                    id: message.id,
+                    admin: "1234"//admin id
+                }
+                socket.send(JSON.stringify(newname));
+            }
+
+            //user list
+            if (message.type === 'exam') {
+                console.log("user list")
+                if (message.students.length === 0) {
+                    view.innerHTML = "NO EXAMS ARE LIVE";
+                    return;
+                }
+                console.log(message.students)
+                if(last_index === 0){
+                    view.innerHTML = `<table id='warning_logs'>
+                                        <tr><th>Name</th>
+                                            <th>ID</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                      </table>`
+                }
+
+
+            }
+
+            //warnings
+            if (message.type === 'warnings') {
+                const warning_table = document.getElementById('warning_logs');
+                const student_obj = live_students[message.sid];
+                const row = warning_table.rows[student_obj.rtc.index];
+                for (const x in message.warnings) {
+                    student_obj.warnings[x] += 1;
+                }
+                const temp = student_obj.warnings;
+                row.innerHTML = `
+                                        <td>${message.name}</td>
+                                        <td>${message.sid}</td>
+                                        <td>
+                                            <button class=webc onclick=webcbutton(${message.sid})>webcam</button>
+                                            <button class=screen onclick=screenbutton(${message.sid})>screen</button>
+                                            <button class=kick onclick=kickstudent(${message.sid})>kick</button>
+                                        </td>`
+            }
+
+
+            //new student added
+            if (message.type === 'add') {
+                console.log("add student");
+                const warning_table = document.getElementById('warning_logs');
+                message.index = ++last_index;
+                const new_row = warning_table.insertRow(last_index);
+                new_row.innerHTML = `
+                                        <td>${message.name}</td>
+                                        <td>${message.sid}</td>
+                                        <td>
+                                            <button class=webc onclick=webcbutton(${message.sid})>webcam</button>
+                                            <button class=screen onclick=screenbutton(${message.sid})>screen</button>
+                                            <button class=kick onclick=kickstudent(${message.sid})>kick</button>
+                                        </td>`
+                live_students[message.sid] = {
+                    rtc: new webrtc(message)
+                };
+            }
+
+            //student deleted
+            if (message.type === 'del') {
+                console.log("delete student");
+                const warning_table = document.getElementById('warning_logs');
+                warning_table.deleteRow(last_index);
+                last_index--;
+                delete live_students[message.sid];
+            }
+            //webrtc offer
+            if (message.type === 'offer') {
+                console.log("offer received");
+                let student_connection = live_students[message.sid];
+                student_connection.rtc.handleOffer(message);
+            }
+
+            //new ice candidate received
+            if (message.type === 'new-ice-candidate') {
+                console.log("new ice candidate:")
+                let student_connection = live_students[message.sid];
+                await student_connection.rtc.handleNewICECandidateMsg(message);
+            }
+        }
+
+
+    </script>
+
+</html>

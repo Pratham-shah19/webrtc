@@ -1,0 +1,19 @@
+
+table{
+    border:2px solid black;
+    border-collapse: collapse;
+
+}
+tr,td,th{
+    border: 1px solid black;
+    border-collapse: collapse;
+    padding: 1rem;
+}
+
+.webc,.screen,.kick{
+    padding: 0.5rem;
+    font-size: large;
+    border: none;
+    cursor: pointer;
+
+}
